@@ -5,6 +5,9 @@
 #   scripts/docker-build-install.sh              # build + install
 #   scripts/docker-build-install.sh --build-only
 #   scripts/docker-build-install.sh --install-only
+#
+# China: apt→tuna, rustup/crates.io→rsproxy, github→GH_PROXY (ghfast.top).
+# Host https_proxy is forwarded for anything the mirrors do not cover.
 
 set -euo pipefail
 
@@ -31,10 +34,23 @@ done
 build() {
   mkdir -p "$DIST"
   echo "Building grok in Docker (this takes a while on first run)..."
+  # Forward the host proxy so GitHub git deps work from China. Apt/rustup/crates.io
+  # use China mirrors (tuna + rsproxy) and skip the proxy via NO_PROXY.
+  local -a proxy_args=()
+  if [[ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]]; then
+    proxy_args+=(
+      --build-arg "http_proxy=${http_proxy:-${HTTP_PROXY:-${https_proxy:-$HTTPS_PROXY}}}"
+      --build-arg "https_proxy=${https_proxy:-${HTTPS_PROXY:-${http_proxy:-$HTTP_PROXY}}}"
+      --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-${HTTPS_PROXY:-$https_proxy}}}"
+      --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-$http_proxy}}}"
+    )
+    echo "Using host proxy for GitHub fetches."
+  fi
   docker build \
     --target export \
     --output "type=local,dest=$DIST" \
     -f "$ROOT/docker/Dockerfile" \
+    "${proxy_args[@]}" \
     "$ROOT"
   chmod +x "$DIST/grok"
   echo "Built: $DIST/grok"
