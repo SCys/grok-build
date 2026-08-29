@@ -5482,6 +5482,12 @@ pub(crate) fn to_acp_model_info(
                         reasoning_efforts_meta_value(&info.reasoning_efforts),
                     );
                 }
+                let is_custom = info.model_family.as_deref() != Some("xai")
+                    && crate::models::is_custom_model(key)
+                    && crate::models::is_custom_model(&info.model);
+                if is_custom {
+                    map.insert("isCustom".to_string(), serde_json::Value::Bool(true));
+                }
                 if map.is_empty() { None } else { Some(map) }
             };
             (

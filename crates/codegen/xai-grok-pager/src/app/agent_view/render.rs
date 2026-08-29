@@ -2511,7 +2511,14 @@ impl AgentView {
                 self.chat_kind,
             )
         });
-        let usage_warning_text: Option<String> = warning.as_ref().map(|(t, _)| t.clone());
+        let is_custom_model = self.session.models.is_current_model_custom();
+        let usage_warning_text: Option<String> = warning.as_ref().map(|(t, _)| {
+            if is_custom_model {
+                "!".to_string()
+            } else {
+                t.clone()
+            }
+        });
         let usage_warning = usage_warning_text.as_deref();
         let usage_warning_critical = warning.is_some_and(|(_, critical)| critical);
         let model_label = match self.session.models.reasoning_effort {

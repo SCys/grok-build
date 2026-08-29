@@ -2168,8 +2168,16 @@ fn render_welcome_done(
         let warning = p.credit_balance.and_then(|bal| {
             crate::views::credit_bar::usage_warning(bal, p.auto_topup, p.usage_visible)
         });
+        let is_custom_model = xai_grok_shell::models::is_custom_model(p.model_name);
         let (usage_warning_text, usage_warning_critical) = match warning {
-            Some((text, critical)) => (Some(text), critical),
+            Some((text, critical)) => {
+                let display_text = if is_custom_model {
+                    "!".to_string()
+                } else {
+                    text
+                };
+                (Some(display_text), critical)
+            }
             None => (None, false),
         };
         let usage_info = PromptInfo {

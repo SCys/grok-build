@@ -66,3 +66,50 @@ pub fn default_session_summary_model() -> &'static str {
         .as_deref()
         .unwrap_or(&DEFAULTS.default)
 }
+
+/// Whether a given model ID or display name represents a built-in Grok/SpaceXAI model.
+pub fn is_builtin_model(id_or_name: &str) -> bool {
+    let trimmed = id_or_name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("grok") {
+        return true;
+    }
+    let first_token = lower.split_whitespace().next().unwrap_or(&lower);
+    if first_token.starts_with("grok") {
+        return true;
+    }
+    DEFAULTS
+        .models
+        .iter()
+        .any(|m| m.model.eq_ignore_ascii_case(trimmed) || m.model.eq_ignore_ascii_case(first_token))
+}
+
+/// Whether a given model ID or display name represents a custom (third-party or user-configured) model.
+pub fn is_custom_model(id_or_name: &str) -> bool {
+    !is_builtin_model(id_or_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_builtin_and_custom_models() {
+        assert!(is_builtin_model("grok-4.6"));
+        assert!(is_builtin_model("grok-4.5"));
+        assert!(is_builtin_model("grok-3"));
+        assert!(is_builtin_model("Grok 4.6"));
+        assert!(is_builtin_model("grok-4.6 (high)"));
+        assert!(!is_custom_model("grok-4.6"));
+
+        assert!(!is_builtin_model("claude-3-7-sonnet"));
+        assert!(is_custom_model("claude-3-7-sonnet"));
+        assert!(is_custom_model("deepseek-chat"));
+        assert!(is_custom_model("gpt-4o"));
+        assert!(is_custom_model("my-custom-model"));
+        assert!(is_custom_model(""));
+    }
+}

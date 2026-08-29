@@ -107,6 +107,30 @@ impl ModelState {
         true
     }
 
+    /// Whether the current model is a custom (non-built-in) model.
+    pub fn is_current_model_custom(&self) -> bool {
+        let Some(current) = self.current.as_ref() else {
+            return false;
+        };
+        if let Some(meta) = self
+            .available
+            .get(current)
+            .and_then(|info| info.meta.as_ref())
+        {
+            if let Some(is_custom) = meta.get("isCustom").and_then(|v| v.as_bool()) {
+                return is_custom;
+            }
+        }
+        let model_id_str = current.0.as_ref();
+        let model_name = self
+            .available
+            .get(current)
+            .map(|info| info.name.as_str())
+            .unwrap_or(model_id_str);
+        xai_grok_shell::models::is_custom_model(model_id_str)
+            && xai_grok_shell::models::is_custom_model(model_name)
+    }
+
     /// The effective context window size (tokens): the override if set, else the current model's metadata.
     pub fn get_context_window(&self) -> Option<u64> {
         self.context_window_override
@@ -535,5 +559,39 @@ mod tests {
             !state_with_meta(Some(serde_json::json!({ "inputModalities": ["text"] })))
                 .current_model_accepts_images()
         );
+    }
+
+    #[test]
+    fn test_is_current_model_custom() {
+        let mut state = ModelState::default();
+        assert!(!state.is_current_model_custom());
+
+        // Built-in model
+        let grok_id = acp::ModelId::new(Arc::from("grok-4.6"));
+        state.available.insert(
+            grok_id.clone(),
+            acp::ModelInfo::new(grok_id.clone(), "Grok 4.6".to_string()),
+        );
+        state.current = Some(grok_id);
+        assert!(!state.is_current_model_custom());
+
+        // Custom model by name
+        let custom_id = acp::ModelId::new(Arc::from("claude-3-7-sonnet"));
+        state.available.insert(
+            custom_id.clone(),
+            acp::ModelInfo::new(custom_id.clone(), "Claude 3.7 Sonnet".to_string()),
+        );
+        state.current = Some(custom_id);
+        assert!(state.is_current_model_custom());
+
+        // Custom model with explicit meta
+        let explicit_custom = acp::ModelId::new(Arc::from("my-model"));
+        state.available.insert(
+            explicit_custom.clone(),
+            acp::ModelInfo::new(explicit_custom.clone(), "My Model".to_string())
+                .meta(Some(serde_json::json!({ "isCustom": true }).as_object().unwrap().clone())),
+        );
+        state.current = Some(explicit_custom);
+        assert!(state.is_current_model_custom());
     }
 }
