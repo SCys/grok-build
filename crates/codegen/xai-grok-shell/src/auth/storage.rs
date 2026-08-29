@@ -3,6 +3,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fs2::FileExt;
+
 use super::model::{API_KEY_SCOPE, AuthMode, AuthStore, GrokAuth};
 
 #[must_use]
@@ -15,6 +17,7 @@ impl Drop for AuthFileLock {
     fn drop(&mut self) {
         // Join the heartbeat while the flock is held; a late rewrite would stamp a sibling's lock.
         self.heartbeat.take();
+        let _ = self.file.unlock();
     }
 }
 

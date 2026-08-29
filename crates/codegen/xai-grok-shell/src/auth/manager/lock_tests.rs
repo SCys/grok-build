@@ -465,6 +465,7 @@ async fn dead_recorded_pid_with_live_flock_is_never_broken() {
 
 #[cfg(unix)]
 #[test]
+#[serial_test::serial]
 fn dropping_the_guard_silences_the_heartbeat_before_anyone_else_can_hold_the_lock() {
     let dir = TempDir::new().unwrap();
     let lock_path = dir.path().join("auth.json.lock");

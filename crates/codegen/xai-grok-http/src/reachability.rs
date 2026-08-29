@@ -16,17 +16,24 @@ const CLI_CHAT_PROXY_DEFAULT: &str = "https://cli-chat-proxy.grok.com/v1";
 
 /// True when `url`'s origin answers within [`STARTUP_REACHABILITY_TIMEOUT`].
 pub fn https_url_reachable(url: &str) -> bool {
-    let Ok(client) = Client::builder()
-        .connect_timeout(STARTUP_REACHABILITY_TIMEOUT)
-        .timeout(STARTUP_REACHABILITY_TIMEOUT)
-        .build()
-    else {
-        return false;
-    };
-    match client.get(url).send() {
-        Ok(_) => true,
-        Err(err) => err.status().is_some(),
-    }
+    let url = url.to_string();
+    // Run probe in an isolated OS thread so reqwest::blocking::Client's
+    // internal runtime setup/drop never collides with an outer Tokio context.
+    std::thread::spawn(move || {
+        let Ok(client) = Client::builder()
+            .connect_timeout(STARTUP_REACHABILITY_TIMEOUT)
+            .timeout(STARTUP_REACHABILITY_TIMEOUT)
+            .build()
+        else {
+            return false;
+        };
+        match client.get(&url).send() {
+            Ok(_) => true,
+            Err(err) => err.status().is_some(),
+        }
+    })
+    .join()
+    .unwrap_or(false)
 }
 
 fn cached(cell: &OnceLock<bool>, url: &str, label: &str) -> bool {

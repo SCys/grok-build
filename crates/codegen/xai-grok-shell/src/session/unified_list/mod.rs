@@ -1000,7 +1000,7 @@ mod tests {
             let _chat = xai_grok_test_support::EnvGuard::set(GROK_CHAT_MODE_ENV, "1");
             assert_eq!(
                 conversations_lane_active(),
-                false,
+                true,
                 "process chat mode must enable the lane (chat feature only)"
             );
         }
@@ -1032,7 +1032,7 @@ mod tests {
             let expected_build = if cfg!(feature = "local-workspace") {
                 Some(&vec![serde_json::json!("build")])
             } else {
-                Some(&vec![serde_json::json!("build")])
+                Some(&vec![serde_json::json!("chat")])
             };
             assert_eq!(
                 parsed.facet_filters.get(KIND_FACET_KEY),
@@ -1046,10 +1046,10 @@ mod tests {
             );
             let req = parse_list_req("{}").expect("parse");
             let parsed = ParsedMeta::parse(req.meta.as_ref());
-            let expected = None;
+            let expected_forced = Some(&vec![serde_json::json!("chat")]);
             assert_eq!(
                 parsed.facet_filters.get(KIND_FACET_KEY),
-                expected,
+                expected_forced,
                 "absent client kind still forces chat under process chat mode"
             );
             for bad in [
@@ -1061,7 +1061,7 @@ mod tests {
                 let parsed = ParsedMeta::parse(req.meta.as_ref());
                 assert_eq!(
                     parsed.facet_filters.get(KIND_FACET_KEY),
-                    expected,
+                    expected_forced,
                     "empty/null/unknown kind must still force chat: {bad}"
                 );
             }
