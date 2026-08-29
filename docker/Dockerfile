@@ -112,5 +112,14 @@ RUN --mount=type=cache,id=grok-cargo-registry-cn,target=/usr/local/cargo/registr
     && cp /src/target/release/xai-grok-pager /tmp/grok \
     && strip /tmp/grok
 
+FROM builder AS tester
+RUN --mount=type=cache,id=grok-cargo-registry-cn,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=grok-cargo-git-cn,target=/usr/local/cargo/git \
+    --mount=type=cache,id=grok-cargo-target,target=/src/target \
+    cargo test --locked -p xai-grok-http --lib \
+    && cargo test --locked -p xai-grok-update --lib \
+    && cargo test --locked -p xai-grok-shell --lib \
+    && cargo test --locked -p xai-grok-pager-bin --bins
+
 FROM scratch AS export
 COPY --from=builder /tmp/grok /grok

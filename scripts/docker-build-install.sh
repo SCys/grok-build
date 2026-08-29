@@ -5,6 +5,7 @@
 #   scripts/docker-build-install.sh              # build + install
 #   scripts/docker-build-install.sh --build-only
 #   scripts/docker-build-install.sh --install-only
+#   scripts/docker-build-install.sh --test       # run unit tests in Docker
 #
 # China: apt→tuna, rustup/crates.io→rsproxy, github→GH_PROXY (ghfast.top).
 # Host https_proxy is forwarded for anything the mirrors do not cover.
@@ -20,8 +21,9 @@ for arg in "$@"; do
   case "$arg" in
     --build-only) MODE="build" ;;
     --install-only) MODE="install" ;;
+    --test|--test-only) MODE="test" ;;
     -h|--help)
-      sed -n '2,8p' "$0"
+      sed -n '2,9p' "$0"
       exit 0
       ;;
     *)
@@ -106,9 +108,29 @@ install_bin() {
   grok --version
 }
 
+run_tests() {
+  echo "Running unit tests in Docker..."
+  local -a proxy_args=()
+  if [[ -n "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}${HTTP_PROXY:-}" ]]; then
+    proxy_args+=(
+      --build-arg "http_proxy=${http_proxy:-${HTTP_PROXY:-${https_proxy:-$HTTPS_PROXY}}}"
+      --build-arg "https_proxy=${https_proxy:-${HTTPS_PROXY:-${http_proxy:-$HTTP_PROXY}}}"
+      --build-arg "HTTP_PROXY=${HTTP_PROXY:-${http_proxy:-${HTTPS_PROXY:-$https_proxy}}}"
+      --build-arg "HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-$http_proxy}}}"
+    )
+  fi
+  docker build \
+    --target tester \
+    -f "$ROOT/docker/Dockerfile" \
+    "${proxy_args[@]}" \
+    "$ROOT"
+  echo "All unit tests passed successfully."
+}
+
 case "$MODE" in
   build) build ;;
   install) install_bin ;;
+  test) run_tests ;;
   all)
     build
     install_bin
