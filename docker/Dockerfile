@@ -10,7 +10,7 @@
 
 FROM ubuntu:24.04 AS builder
 
-ARG UBUNTU_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+ARG UBUNTU_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 ARG GH_PROXY=https://ghfast.top/
 ARG RUSTUP_DIST_SERVER=https://rsproxy.cn
 ARG RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
@@ -22,6 +22,8 @@ ARG HTTPS_PROXY
 ARG no_proxy=localhost,127.0.0.1,rsproxy.cn,mirrors.tuna.tsinghua.edu.cn,mirrors.aliyun.com,mirrors.ustc.edu.cn
 ARG NO_PROXY=localhost,127.0.0.1,rsproxy.cn,mirrors.tuna.tsinghua.edu.cn,mirrors.aliyun.com,mirrors.ustc.edu.cn
 
+# Do not put http(s)_proxy in ENV yet: the ubuntu image has no CA bundle, so a
+# TLS-intercepting proxy (or HTTPS apt) fails before ca-certificates is installed.
 ENV DEBIAN_FRONTEND=noninteractive \
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -31,37 +33,31 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PROTOC=/usr/local/bin/protoc \
     RUSTUP_TOOLCHAIN=1.94.0 \
     CARGO_NET_GIT_FETCH_WITH_CLI=true \
-    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
     RUSTUP_DIST_SERVER=${RUSTUP_DIST_SERVER} \
-    RUSTUP_UPDATE_ROOT=${RUSTUP_UPDATE_ROOT} \
-    http_proxy=${http_proxy} \
-    https_proxy=${https_proxy} \
-    HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    no_proxy=${no_proxy} \
-    NO_PROXY=${NO_PROXY}
+    RUSTUP_UPDATE_ROOT=${RUSTUP_UPDATE_ROOT}
 
 # Rewrite Ubuntu archive/security to a China mirror before the first apt-get.
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
       sed -i \
-        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
         -e "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
-        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
         -e "s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
         /etc/apt/sources.list.d/ubuntu.sources; \
     fi; \
     if [ -f /etc/apt/sources.list ]; then \
       sed -i \
-        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
         -e "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
-        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
         -e "s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
         /etc/apt/sources.list; \
     fi
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Drop any BuildKit-injected proxy: this image has no CA bundle yet.
+RUN unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; \
+    apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         clang \
@@ -73,6 +69,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
         unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Proxy only after CA certs exist. Mirrors stay in NO_PROXY.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    no_proxy=${no_proxy} \
+    NO_PROXY=${NO_PROXY}
 
 # GitHub git deps (async-openai, nucleo) and release downloads go through GH_PROXY.
 RUN if [ -n "${GH_PROXY}" ]; then \
