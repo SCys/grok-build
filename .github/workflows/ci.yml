@@ -18,6 +18,7 @@ env:
   CARGO_INCREMENTAL: "0"
   RUSTUP_TOOLCHAIN: "1.94.0"
   PROTOC: /usr/local/bin/protoc
+  RUST_MIN_STACK: "16777216"
 
 jobs:
   test:
