@@ -117,7 +117,8 @@ FROM builder AS tester
 RUN --mount=type=cache,id=grok-cargo-registry-cn,target=/usr/local/cargo/registry \
     --mount=type=cache,id=grok-cargo-git-cn,target=/usr/local/cargo/git \
     --mount=type=cache,id=grok-cargo-target,target=/src/target \
-    cargo test --locked -p xai-grok-http --lib \
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY \
+    && cargo test --locked -p xai-grok-http --lib \
     && cargo test --locked -p xai-grok-update --lib \
     && cargo test --locked -p xai-grok-shell --lib \
     && cargo test --locked -p xai-grok-pager-bin --bins
