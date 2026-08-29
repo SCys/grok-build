@@ -20,6 +20,12 @@ use std::sync::OnceLock;
 
 use xai_grok_workspace::permission::ClientType;
 
+mod reachability;
+pub use reachability::{
+    STARTUP_REACHABILITY_TIMEOUT, auth_issuer_reachable, cli_chat_proxy_reachable,
+    default_auth_issuer_url, default_cli_chat_proxy_url, https_url_reachable,
+};
+
 /// Per-attempt ceiling for a startup `/settings` or `/v1/models` fetch; raising it delays how soon the background refresh gives up and retries.
 pub const STARTUP_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Cap on auth during a non-interactive boot, either a token refresh or a cold-start mint.

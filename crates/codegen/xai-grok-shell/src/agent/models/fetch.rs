@@ -177,6 +177,10 @@ fn start_early_prefetch_with_auth_gated(
 ) -> Option<EarlyPrefetchHandle> {
     let _timer = crate::instrumentation_timer!("startup.early_prefetch_launch");
     let endpoints = resolve_startup_endpoints();
+    if !crate::http::cli_chat_proxy_reachable(&endpoints.proxy_url()) {
+        tracing::info!("startup prefetch skipped: cli-chat-proxy unreachable");
+        return None;
+    }
     if sync_managed {
         spawn_managed_config_sync_if_stale(&endpoints);
     }

@@ -2492,8 +2492,14 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
     if no_auto_update_flag {
         return false;
     }
-    !std::env::var_os("GROK_DISABLE_AUTOUPDATER")
+    if std::env::var_os("GROK_DISABLE_AUTOUPDATER")
         .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
+    {
+        return false;
+    }
+    xai_grok_shell::http::cli_chat_proxy_reachable(
+        &xai_grok_shell::http::default_cli_chat_proxy_url(),
+    )
 }
 /// Gate for the stdio agent's background auto-update: only the direct stdio
 /// agent, from the managed install. Other modes update in `run_agent_command`.

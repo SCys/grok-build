@@ -624,24 +624,40 @@ pub async fn run(
             xai_grok_shell::auth::GrokComConfig::default()
         }
     };
-    if matches!(
-        xai_grok_shell::auth::maybe_run_pre_tui_external_login(
-            &grok_com_config,
-            args.force_login,
-            io::stdin().is_terminal(),
+    let idp_reachable = xai_grok_shell::http::auth_issuer_reachable(
+        grok_com_config
+            .oauth2
+            .as_ref()
+            .map(|o| o.issuer.as_str())
+            .or(grok_com_config.oidc.as_ref().map(|o| o.issuer.as_str()))
+            .unwrap_or(xai_grok_shell::auth::XAI_OAUTH2_ISSUER),
+    );
+    // Pre-TUI provider login can block for minutes when the IdP is firewalled.
+    if (args.force_login || idp_reachable)
+        && matches!(
+            xai_grok_shell::auth::maybe_run_pre_tui_external_login(
+                &grok_com_config,
+                args.force_login,
+                io::stdin().is_terminal(),
+            )
+            .await?,
+            xai_grok_shell::auth::PreTuiLoginOutcome::SignedIn(_)
         )
-        .await?,
-        xai_grok_shell::auth::PreTuiLoginOutcome::SignedIn(_)
-    ) {
+    {
         args.force_login = false;
     }
     xai_tty_utils::redirect_native_stderr();
-    let refreshed_auth = tokio::time::timeout(
-        xai_grok_shell::http::STARTUP_AUTH_REFRESH_TIMEOUT,
-        xai_grok_shell::auth::try_ensure_fresh_auth(&grok_com_config),
-    )
-    .await
-    .unwrap_or(None);
+    let refreshed_auth = if idp_reachable {
+        tokio::time::timeout(
+            xai_grok_shell::http::STARTUP_AUTH_REFRESH_TIMEOUT,
+            xai_grok_shell::auth::try_ensure_fresh_auth(&grok_com_config),
+        )
+        .await
+        .unwrap_or(None)
+    } else {
+        tracing::info!("startup auth refresh skipped: identity provider unreachable");
+        None
+    };
     let early_prefetch = match refreshed_auth {
         Some(auth) => xai_grok_shell::agent::models::start_early_prefetch_with_auth(Some(auth)),
         None => xai_grok_shell::agent::models::start_early_prefetch(Some(grok_com_config.clone())),

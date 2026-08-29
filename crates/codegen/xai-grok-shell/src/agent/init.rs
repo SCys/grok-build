@@ -78,24 +78,28 @@ fn ensure_remote_settings_side_effects(cfg: &mut AgentConfig, sync_managed: bool
     // spawned us. Clients that already call `start_early_prefetch()` and
     // thread the result into `cfg.remote_settings` skip this entirely.
     if cfg.remote_settings.is_none() {
-        let handle = if sync_managed {
-            crate::agent::models::start_early_prefetch(Some(cfg.grok_com_config.clone()))
+        if !crate::http::cli_chat_proxy_reachable(&cfg.endpoints.proxy_url()) {
+            tracing::info!("remote_settings fallback skipped: cli-chat-proxy unreachable");
         } else {
-            crate::agent::models::start_early_prefetch_settings_only(Some(
-                cfg.grok_com_config.clone(),
-            ))
-        };
-        if let Some(handle) = handle {
-            match handle.join() {
-                Ok(result) => {
-                    cfg.remote_settings = result.settings;
-                    crate::util::config::set_remote_campaigns_from_settings(
-                        cfg.remote_settings.as_ref(),
-                    );
-                    tracing::info!("remote_settings fetched as shell-level fallback");
-                }
-                Err(_) => {
-                    tracing::warn!("remote_settings fallback prefetch thread panicked");
+            let handle = if sync_managed {
+                crate::agent::models::start_early_prefetch(Some(cfg.grok_com_config.clone()))
+            } else {
+                crate::agent::models::start_early_prefetch_settings_only(Some(
+                    cfg.grok_com_config.clone(),
+                ))
+            };
+            if let Some(handle) = handle {
+                match handle.join() {
+                    Ok(result) => {
+                        cfg.remote_settings = result.settings;
+                        crate::util::config::set_remote_campaigns_from_settings(
+                            cfg.remote_settings.as_ref(),
+                        );
+                        tracing::info!("remote_settings fetched as shell-level fallback");
+                    }
+                    Err(_) => {
+                        tracing::warn!("remote_settings fallback prefetch thread panicked");
+                    }
                 }
             }
         }

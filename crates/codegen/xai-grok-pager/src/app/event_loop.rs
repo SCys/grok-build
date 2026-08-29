@@ -1195,8 +1195,13 @@ pub(crate) async fn run(
 
     // Seed auth state from ACP connection metadata.
     // --force-login overrides: show the login screen even when credentials exist.
+    // If the IdP is firewalled, skip auto-login so the TUI can start; `/login` still works.
     let force_login = args.force_login && !connection.auth_methods.is_empty();
-    let needs_interactive_login = connection.needs_login || force_login;
+    let idp_reachable = xai_grok_shell::http::auth_issuer_reachable(
+        &xai_grok_shell::http::default_auth_issuer_url(),
+    );
+    let needs_interactive_login =
+        force_login || (connection.needs_login && idp_reachable);
     if needs_interactive_login {
         app.welcome_prompt_focused = false;
 
