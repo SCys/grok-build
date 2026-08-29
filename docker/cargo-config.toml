@@ -1,0 +1,15 @@
+# Cargo config used only inside docker/Dockerfile (CARGO_HOME).
+# crates.io → rsproxy sparse index (China). Git deps still use git+CLI
+# so GH_PROXY / https_proxy can rewrite github.com.
+
+[net]
+git-fetch-with-cli = true
+
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"

@@ -1,0 +1,8 @@
+# Keep the Docker context small. `.git` stays in so pager-bin/build.rs can
+# stamp VERSION_WITH_COMMIT from `git rev-parse`.
+/target
+/dist
+**/*.rs.bk
+.DS_Store
+**/.grok
+docker/*.md
