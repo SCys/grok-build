@@ -1,17 +1,21 @@
-# Test key crates and build the grok TUI binary.
-# GitHub-hosted runners can reach crates.io / GitHub; do not use the China
-# Docker mirrors here.
+# Test key crates, build cross-architecture grok TUI binaries (x86_64 and arm64),
+# and publish GitHub Releases with versioned assets.
 name: CI
 
 on:
   push:
     branches: [main, local-main, "local/**"]
+    tags: ["v*"]
   pull_request:
+    branches: [main, local-main]
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,9 +62,23 @@ jobs:
           cargo test --locked -p xai-grok-pager-bin --bins
 
   build:
-    name: build
-    runs-on: ubuntu-24.04
+    name: build-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+            arch: x86_64
+            protoc_zip: protoc-29.3-linux-x86_64.zip
+            cache_key: linux-x64
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            arch: aarch64
+            protoc_zip: protoc-29.3-linux-aarch_64.zip
+            cache_key: linux-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -73,7 +91,7 @@ jobs:
       - name: Install protoc 29.3
         run: |
           curl -fsSL -o /tmp/protoc.zip \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip"
+            "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/${{ matrix.protoc_zip }}"
           sudo unzip -qo /tmp/protoc.zip -d /usr/local
           protoc --version
 
@@ -84,20 +102,77 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: linux-x64
+          shared-key: ${{ matrix.cache_key }}
 
       - name: Release binary
         run: cargo build --locked -p xai-grok-pager-bin --release
 
       - name: Package
+        id: package
         run: |
+          VERSION=$(grep -m1 '^version' crates/codegen/xai-grok-pager-bin/Cargo.toml | cut -d '"' -f2)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          
           mkdir -p dist
           cp target/release/xai-grok-pager dist/grok
           chmod +x dist/grok
           ./dist/grok --version
 
+          cp dist/grok "dist/grok-v${VERSION}-${{ matrix.name }}"
+          cp dist/grok "dist/grok-${{ matrix.name }}"
+          tar -czf "dist/grok-v${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
+          tar -czf "dist/grok-${{ matrix.name }}.tar.gz" -C dist grok
+          rm dist/grok
+
       - uses: actions/upload-artifact@v4
         with:
-          name: grok-linux-x86_64
-          path: dist/grok
+          name: grok-${{ matrix.name }}
+          path: dist/
           if-no-files-found: error
+
+  release:
+    name: release
+    needs: [build, test]
+    if: github.ref == 'refs/heads/local-main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Prepare release assets
+        id: rel_meta
+        run: |
+          VERSION=$(grep -m1 '^version' crates/codegen/xai-grok-pager-bin/Cargo.toml | cut -d '"' -f2)
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="v${VERSION}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          mkdir -p release-assets
+          find dist-artifacts -type f -exec cp {} release-assets/ \;
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          echo "=== Release Assets ==="
+          ls -lah
+          echo "=== Checksums ==="
+          cat SHA256SUMS
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel_meta.outputs.tag }}
+          name: Grok Build ${{ steps.rel_meta.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
