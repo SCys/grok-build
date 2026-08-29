@@ -609,7 +609,11 @@ pub async fn check_update_background(update_config: &UpdateConfig) -> Background
     }
 
     let current_config = config::load_config().await;
-    if current_config.cli.auto_update == Some(false) {
+    if !current_config
+        .cli
+        .auto_update
+        .unwrap_or(xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE)
+    {
         return BackgroundUpdateCheck::none();
     }
 
@@ -701,23 +705,13 @@ pub async fn run_update_if_available(
 
     let current_config = config::load_config().await;
 
-    // Skip update check if auto-update is explicitly disabled.
-    if current_config.cli.auto_update == Some(false) {
+    // Unset defaults to off so launch does not hit the updater.
+    let auto_update = current_config
+        .cli
+        .auto_update
+        .unwrap_or(xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE);
+    if !auto_update {
         return Ok(false);
-    }
-
-    // Resolve effective auto_update: None defaults to true (first-run).
-    let auto_update = current_config.cli.auto_update.unwrap_or(true);
-
-    if current_config.cli.auto_update.is_none()
-        && let Err(e) = config::update_config(|st| {
-            if st.cli.auto_update.is_none() {
-                st.cli.auto_update = Some(true);
-            }
-        })
-        .await
-    {
-        tracing::warn!("Failed to save auto-update setting: {}", e);
     }
 
     let current_version = get_installed_grok_version();

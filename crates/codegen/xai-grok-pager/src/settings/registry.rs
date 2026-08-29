@@ -266,7 +266,7 @@ pub struct PagerLocalSnapshot {
     pub plan_mode_active: bool,
     /// `[cli].show_tips` mirror; `None` means no TOML override, so the default `true` applies.
     pub show_tips: Option<bool>,
-    /// `[cli].auto_update` mirror; `None` means no TOML override, so the default `true` applies.
+    /// `[cli].auto_update` mirror; `None` means no TOML override, so [`xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE`] applies.
     pub auto_update: Option<bool>,
     /// Process-wide vim-mode scrollback flag.
     /// Mirrors `appearance::cache::load_vim_mode()` at snapshot time.
@@ -675,7 +675,11 @@ pub fn current_value_for(
         )),
         // CLI batch: snapshot mirrors; `None` means the effective default `true`
         "show_tips" => Some(SettingValue::Bool(pager.show_tips.unwrap_or(true))),
-        "auto_update" => Some(SettingValue::Bool(pager.auto_update.unwrap_or(true))),
+        "auto_update" => Some(SettingValue::Bool(
+            pager
+                .auto_update
+                .unwrap_or(xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE),
+        )),
         // fork_secondary_model: the baseline value folds to the empty string
         // The mirror persists the ModelId slug but the DynamicEnum canonicals are catalog display names, so resolve via the snapshot
         // A stale id passes through raw
@@ -939,10 +943,10 @@ mod tests {
                     assert!(*default, "show_tips registry default must be true");
                 }
                 ("auto_update", SettingKind::Bool { default }) => {
-                    assert!(
+                    assert_eq!(
                         *default,
-                        "auto_update registry default must be true \
-                         (matches auto_update.rs's `.unwrap_or(true)`)"
+                        xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE,
+                        "auto_update registry default must match DEFAULT_AUTO_UPDATE"
                     );
                 }
                 // vim_mode: Option<bool>; None reads as false

@@ -1551,7 +1551,11 @@ async fn run_agent_command(
                         let uc = update_config_for_leader.clone();
                         Box::pin(async move {
                             let current_config = xai_grok_shell::util::config::load_config().await;
-                            if current_config.cli.auto_update == Some(false) {
+                            if !current_config
+                                .cli
+                                .auto_update
+                                .unwrap_or(xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE)
+                            {
                                 return false;
                             }
                             match auto_update::ensure_latest_on_disk(&uc).await {

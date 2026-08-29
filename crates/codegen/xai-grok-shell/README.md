@@ -1333,7 +1333,7 @@ Each feature section below documents its own config. This section covers the gen
 
 ```toml
 [cli]
-auto_update = true                     # check for updates on launch
+auto_update = false                    # check for updates on launch (opt-in)
 
 [models]
 default = "grok-4.6"                   # model used for new sessions
