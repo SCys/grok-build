@@ -35,6 +35,7 @@
 | `local/startup-connectivity-gate` | 连通性门闸 |
 | `local/no-startup-auto-update` | 默认不自动升级 |
 | `local/docker-build` | 国内镜像 Docker 编译 |
+| `local/github-actions-ci` | GitHub Actions 测试与构建 |
 | `local-main` | 上面几项的合集，日常使用 |
 
 ---
@@ -146,6 +147,7 @@ grok --version
 | `crates/codegen/xai-grok-tools` | 工具实现 |
 | `crates/codegen/xai-grok-workspace` | 文件系统、VCS、执行、checkpoint |
 | `docker/`、`scripts/docker-build-install.sh` | 国内镜像 Docker 编译 |
+| `.github/workflows/ci.yml` | 测试 + release 构建 |
 | `third_party/` | vendored 依赖（Mermaid 等） |
 
 根目录 `Cargo.toml` 是生成文件，当作只读；改各 crate 自己的 `Cargo.toml`。
@@ -158,6 +160,15 @@ cargo test -p xai-grok-config
 cargo clippy -p <crate>
 cargo fmt --all
 ```
+
+## GitHub Actions
+
+仓库原先没有 CI。本分支在 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 里跑：
+
+- **test**：`xai-grok-http`、`xai-grok-update`、`xai-grok-shell` 的 `--lib` 测试，以及 `xai-grok-pager-bin` 的 `--bins` 测试（不跑整仓 integration，避免 TTY/网络依赖）
+- **build**：`cargo build -p xai-grok-pager-bin --release`，产物以 artifact `grok-linux-x86_64` 上传
+
+触发：`main`、`local-main`、`local/**` 的 push，以及 pull request。GitHub-hosted runner 直连 crates.io / GitHub，不用国内 Docker 镜像。
 
 ## 贡献与许可
 

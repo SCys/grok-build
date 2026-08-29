@@ -1,0 +1,102 @@
+# Test key crates and build the grok TUI binary.
+# GitHub-hosted runners can reach crates.io / GitHub; do not use the China
+# Docker mirrors here.
+name: CI
+
+on:
+  push:
+    branches: [main, local-main, "local/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTUP_TOOLCHAIN: "1.94.0"
+  PROTOC: /usr/local/bin/protoc
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake clang libclang-dev pkg-config libdbus-1-dev unzip
+
+      - name: Install protoc 29.3
+        run: |
+          curl -fsSL -o /tmp/protoc.zip \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip"
+          sudo unzip -qo /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-x64
+
+      - name: Unit tests
+        run: |
+          cargo test --locked -p xai-grok-http --lib
+          cargo test --locked -p xai-grok-update --lib
+          cargo test --locked -p xai-grok-shell --lib
+          cargo test --locked -p xai-grok-pager-bin --bins
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake clang libclang-dev pkg-config libdbus-1-dev unzip
+
+      - name: Install protoc 29.3
+        run: |
+          curl -fsSL -o /tmp/protoc.zip \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip"
+          sudo unzip -qo /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-x64
+
+      - name: Release binary
+        run: cargo build --locked -p xai-grok-pager-bin --release
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/xai-grok-pager dist/grok
+          chmod +x dist/grok
+          ./dist/grok --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grok-linux-x86_64
+          path: dist/grok
+          if-no-files-found: error
