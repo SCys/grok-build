@@ -984,6 +984,10 @@ pub struct CompactionConfig {
     pub memory_flush: Option<crate::config::MemoryFlushSettings>,
     pub pruning: Option<crate::config::PruningSettings>,
 }
+/// When `[cli].auto_update` is unset, skip launch-time update checks.
+/// Opt in with `auto_update = true` or run `grok update`.
+pub const DEFAULT_AUTO_UPDATE: bool = false;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CliConfig {

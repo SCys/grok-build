@@ -1351,7 +1351,9 @@ pub fn default_settings() -> Vec<SettingMeta> {
             keywords: &[
                 "auto", "update", "updates", "upgrade", "version", "install", "channel",
             ],
-            kind: SettingKind::Bool { default: true },
+            kind: SettingKind::Bool {
+                default: xai_grok_shell::agent::config::DEFAULT_AUTO_UPDATE,
+            },
             restart_required: true,
             hidden_in_minimal: false,
         },
