@@ -643,7 +643,6 @@ pub async fn run(
             xai_grok_shell::agent::models::startup_prefetch::begin(Some(grok_com_config.clone()))
         }
     };
-    };
     xai_grok_shell::agent::mvp_agent::warm_async_http_client();
     tokio::task::spawn_blocking(|| {});
     if let Ok(cwd) = std::env::current_dir() {
