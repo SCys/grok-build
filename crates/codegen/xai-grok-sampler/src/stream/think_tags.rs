@@ -140,6 +140,11 @@ impl ThinkTagSplitter {
     }
 
     fn emit(&mut self, out: &mut Vec<(ThinkSink, String)>, sink: ThinkSink, end: usize) {
+        // Never panic on a mid-char index: clamp to the previous char boundary.
+        let mut end = end.min(self.buf.len());
+        while end > 0 && !self.buf.is_char_boundary(end) {
+            end -= 1;
+        }
         if end == 0 {
             return;
         }
@@ -191,9 +196,17 @@ fn incomplete_tag_hold(s: &str, tags: &[&str]) -> usize {
             continue;
         }
         let suf = &s[i..];
+        // Tags are ASCII and always start with `<`. Skip everything else so we
+        // never compare CJK bytes against a tag prefix.
+        if !suf.as_bytes().first().is_some_and(|&b| b == b'<') {
+            continue;
+        }
         if tags.iter().any(|tag| {
             suf.len() < tag.len()
-                && tag.as_bytes()[..suf.len()].eq_ignore_ascii_case(suf.as_bytes())
+                && tag
+                    .as_bytes()
+                    .get(..suf.len())
+                    .is_some_and(|p| p.eq_ignore_ascii_case(suf.as_bytes()))
         }) {
             return s.len() - i;
         }
@@ -442,5 +455,60 @@ mod tests {
             split_all(&["已<thi"]),
             vec![(ThinkSink::Text, "已<thi".into())]
         );
+    }
+
+    #[test]
+    fn cjk_inside_unclosed_think() {
+        assert_eq!(
+            split_all(&["<think>", "已", "经", "完成"]),
+            vec![(ThinkSink::Reasoning, "已经完成".into())]
+        );
+    }
+
+    #[test]
+    fn cjk_streamed_one_char_at_a_time_never_panics() {
+        let src = "已经完成了任务，开始处理。<think>秘密思考</think>\n最终答案。";
+        let chunks: Vec<String> = src.chars().map(|c| c.to_string()).collect();
+        let refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        assert_eq!(
+            split_all(&refs),
+            vec![
+                (ThinkSink::Text, "已经完成了任务，开始处理。".into()),
+                (ThinkSink::Reasoning, "秘密思考".into()),
+                (ThinkSink::Text, "\n最终答案。".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_cjk_split_at_every_char_boundary() {
+        let src = "前缀已<thinking>中文</thinking>后缀";
+        for n in 1..=src.len() {
+            if !src.is_char_boundary(n) {
+                continue;
+            }
+            let mut chunks = Vec::new();
+            let mut i = 0;
+            while i < src.len() {
+                let mut j = (i + n).min(src.len());
+                while j < src.len() && !src.is_char_boundary(j) {
+                    j += 1;
+                }
+                if j == i {
+                    j = i + src[i..].chars().next().unwrap().len_utf8();
+                }
+                chunks.push(&src[i..j]);
+                i = j;
+            }
+            assert_eq!(
+                split_all(&chunks),
+                vec![
+                    (ThinkSink::Text, "前缀已".into()),
+                    (ThinkSink::Reasoning, "中文".into()),
+                    (ThinkSink::Text, "后缀".into()),
+                ],
+                "chunk size {n}"
+            );
+        }
     }
 }
