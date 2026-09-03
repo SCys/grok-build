@@ -18,6 +18,12 @@ use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
 
+// LOCAL: third-party `<think>` / `<thinking>` in Chat Completions `content`.
+// File-local so `stream/mod.rs` stays identical to upstream.
+#[path = "think_tags.rs"]
+mod think_tags;
+use think_tags::{ThinkSink, ThinkTagSplitter};
+
 /// The output stream emits exactly one terminal event per request.
 /// A normal stream end emits [`SamplingEvent::Completed`]; an error or idle timeout emits [`SamplingEvent::Failed`].
 /// Callers must not consume past the terminal event (the implementation `return`s after yielding it).
@@ -62,6 +68,7 @@ pub fn stream_chat_completions<'a>(
 
         let mut content_acc = String::new();
         let mut reasoning_acc = String::new();
+        let mut think_tags = ThinkTagSplitter::new(); // LOCAL: think_tags.rs
         // Tool call deltas keyed by positional index; each entry is (id, name, arguments_buffer)
         // The first chunk for an index carries the id and name and starts the arguments buffer; later chunks append to arguments only
         let mut tool_call_acc: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
@@ -140,23 +147,39 @@ pub fn stream_chat_completions<'a>(
                 if let Some(text) = delta.content
                     && !text.is_empty()
                 {
-                    if !first_token_emitted {
-                        first_token_emitted = true;
-                        yield SamplingEvent::FirstToken {
+                    // Count the wire chunk even when the splitter is holding an
+                    // incomplete `<think` so keepalives cannot idle-timeout us.
+                    chunk_has_content = true;
+                    for (sink, piece) in think_tags.push(&text) {
+                        if piece.is_empty() {
+                            continue;
+                        }
+                        if !first_token_emitted {
+                            first_token_emitted = true;
+                            yield SamplingEvent::FirstToken {
+                                request_id: request_id.clone(),
+                            };
+                        }
+                        chunk_timestamps.push(Instant::now());
+                        chunk_index += 1;
+                        let channel = match sink {
+                            ThinkSink::Text => {
+                                message_chunk_count += 1;
+                                content_acc.push_str(&piece);
+                                SamplingChannel::Text
+                            }
+                            ThinkSink::Reasoning => {
+                                reasoning_acc.push_str(&piece);
+                                SamplingChannel::Reasoning
+                            }
+                        };
+                        yield SamplingEvent::ChannelToken {
                             request_id: request_id.clone(),
+                            channel,
+                            text: piece,
+                            chunk_index,
                         };
                     }
-                    chunk_has_content = true;
-                    chunk_timestamps.push(Instant::now());
-                    chunk_index += 1;
-                    message_chunk_count += 1;
-                    content_acc.push_str(&text);
-                    yield SamplingEvent::ChannelToken {
-                        request_id: request_id.clone(),
-                        channel: SamplingChannel::Text,
-                        text,
-                        chunk_index,
-                    };
                 }
 
                 if let Some(thought) = delta.reasoning_content
@@ -251,6 +274,38 @@ pub fn stream_chat_completions<'a>(
                 );
             }
             finish_reason = Some(StopReason::ToolCalls);
+        }
+
+        // LOCAL: unclosed `<think>` → reasoning so the UI can finish() the block.
+        for (sink, piece) in think_tags.finish() {
+            if piece.is_empty() {
+                continue;
+            }
+            if !first_token_emitted {
+                first_token_emitted = true;
+                yield SamplingEvent::FirstToken {
+                    request_id: request_id.clone(),
+                };
+            }
+            chunk_timestamps.push(Instant::now());
+            chunk_index += 1;
+            let channel = match sink {
+                ThinkSink::Text => {
+                    message_chunk_count += 1;
+                    content_acc.push_str(&piece);
+                    SamplingChannel::Text
+                }
+                ThinkSink::Reasoning => {
+                    reasoning_acc.push_str(&piece);
+                    SamplingChannel::Reasoning
+                }
+            };
+            yield SamplingEvent::ChannelToken {
+                request_id: request_id.clone(),
+                channel,
+                text: piece,
+                chunk_index,
+            };
         }
 
         // Build the trailing Assistant and any reasoning sibling
@@ -825,6 +880,105 @@ mod tests {
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
                 assert_eq!(response.cost_usd_ticks, Some(99));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    // LOCAL: XML think tags in `content` (third-party gateways).
+
+    #[tokio::test]
+    async fn xml_think_tags_in_content_become_reasoning_sibling() {
+        let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
+            Ok(text_chunk("<think>secret</think>\nanswer")),
+            Ok(final_chunk(FinishReason::Stop)),
+        ];
+        let raw = stream::iter(chunks).boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        let mut reasoning = String::new();
+        let mut text = String::new();
+        for e in &events {
+            if let SamplingEvent::ChannelToken { channel, text: t, .. } = e {
+                match channel {
+                    SamplingChannel::Reasoning => reasoning.push_str(t),
+                    SamplingChannel::Text => text.push_str(t),
+                }
+            }
+        }
+        assert_eq!(reasoning, "secret");
+        assert_eq!(text, "\nanswer");
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), "\nanswer");
+                let r = response
+                    .reasoning_items()
+                    .next()
+                    .expect("reasoning sibling from xml tags");
+                let rs::SummaryPart::SummaryText(t) = &r.summary[0];
+                assert_eq!(t.text, "secret");
+                assert_eq!(response.message_chunks_emitted, 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unclosed_xml_think_flushed_as_reasoning() {
+        let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
+            Ok(text_chunk("<thinking>\npartial")),
+            Ok(final_chunk(FinishReason::Stop)),
+        ];
+        let raw = stream::iter(chunks).boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), "");
+                let r = response
+                    .reasoning_items()
+                    .next()
+                    .expect("unclosed think becomes reasoning");
+                let rs::SummaryPart::SummaryText(t) = &r.summary[0];
+                assert_eq!(t.text, "\npartial");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_xml_think_stays_in_assistant_text() {
+        let src = "```\n<think>nope</think>\n```\nlater";
+        let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
+            Ok(text_chunk(src)),
+            Ok(final_chunk(FinishReason::Stop)),
+        ];
+        let raw = stream::iter(chunks).boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), src);
+                assert!(response.reasoning_items().next().is_none());
             }
             other => panic!("expected Completed, got {other:?}"),
         }
