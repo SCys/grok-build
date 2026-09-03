@@ -178,16 +178,21 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
     hay.as_bytes()
         .windows(n)
         .position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+        .filter(|&i| hay.is_char_boundary(i))
 }
 
 fn incomplete_tag_hold(s: &str, tags: &[&str]) -> usize {
     let max = tags.iter().map(|t| t.len()).max().unwrap_or(0);
     let start = s.len().saturating_sub(max);
-    for i in start..s.len() {
+    // Walk char starts only: a CJK chunk like `已` is 3 bytes, and
+    // `start..len` includes 1 and 2, which are not char boundaries.
+    for (i, _) in s.char_indices() {
+        if i < start {
+            continue;
+        }
         let suf = &s[i..];
         if tags.iter().any(|tag| {
             suf.len() < tag.len()
-                && tag.is_char_boundary(suf.len())
                 && tag.as_bytes()[..suf.len()].eq_ignore_ascii_case(suf.as_bytes())
         }) {
             return s.len() - i;
@@ -420,6 +425,22 @@ mod tests {
         assert_eq!(
             split_all(&["<thinking>\npartial"]),
             vec![(ThinkSink::Reasoning, "\npartial".into())]
+        );
+    }
+
+    #[test]
+    fn cjk_chunk_is_not_sliced_mid_char() {
+        assert_eq!(
+            split_all(&["已", "完成"]),
+            vec![(ThinkSink::Text, "已完成".into())]
+        );
+    }
+
+    #[test]
+    fn cjk_then_incomplete_open_tag_at_eof() {
+        assert_eq!(
+            split_all(&["已<thi"]),
+            vec![(ThinkSink::Text, "已<thi".into())]
         );
     }
 }
