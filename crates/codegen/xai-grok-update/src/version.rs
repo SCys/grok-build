@@ -13,6 +13,17 @@ const TTL_SECONDS_BEFORE_AUTO_UPDATE: Duration = Duration::from_secs(60 * 30);
 const NPM_PACKAGE: &str = "@xai-official/grok";
 pub const GH_RELEASE_REPO: &str = "xai-org-shared/grok-build";
 
+/// Resolves the GitHub Releases repository to query/download from.
+/// Priority: `GROK_GH_RELEASE_REPO` -> `GROK_GITHUB_REPO` -> `config.github_repo` -> default `"SCys/grok-build"`.
+pub fn resolve_gh_release_repo(config: &UpdateConfig) -> String {
+    std::env::var("GROK_GH_RELEASE_REPO")
+        .or_else(|_| std::env::var("GROK_GITHUB_REPO"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| config.github_repo.clone())
+        .unwrap_or_else(|| "SCys/grok-build".to_string())
+}
+
 /// Primary CLI base URL: Cloudflare-fronted x.ai endpoint with edge caching for binaries and origin-respecting no-cache for channel pointers.
 pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://x.ai/cli";
 
@@ -76,6 +87,8 @@ pub struct UpdateConfig {
     pub channel: String,
     /// Custom npm registry URL. When set, passed as `--registry=` to npm CLI.
     pub npm_registry: Option<String>,
+    /// GitHub Releases repository in `owner/repo` format for the `gh-release` installer.
+    pub github_repo: Option<String>,
 }
 
 impl UpdateConfig {
@@ -87,6 +100,7 @@ impl UpdateConfig {
             alpha_test_key: None,
             channel: "stable".to_string(),
             npm_registry: None,
+            github_repo: None,
         }
     }
 }
@@ -203,22 +217,26 @@ async fn fetch_npm_tag(tag: &str, npm_registry: Option<&str>) -> Result<String> 
 /// `gh release list --limit 1` orders by publication date, not semver, so we need both.
 #[doc(hidden)]
 pub async fn fetch_gh_release_version(channel: &str) -> Result<String> {
+    fetch_gh_release_version_with_repo(channel, GH_RELEASE_REPO).await
+}
+
+pub async fn fetch_gh_release_version_with_repo(channel: &str, repo: &str) -> Result<String> {
     if channel == "alpha" {
         let (with_pre, stable_only) = tokio::try_join!(
-            fetch_gh_release_latest(false),
-            fetch_gh_release_latest(true),
+            fetch_gh_release_latest(repo, false),
+            fetch_gh_release_latest(repo, true),
         )?;
         return semver_max(&with_pre, &stable_only);
     }
-    fetch_gh_release_latest(true).await
+    fetch_gh_release_latest(repo, true).await
 }
 
-async fn fetch_gh_release_latest(exclude_pre: bool) -> Result<String> {
+async fn fetch_gh_release_latest(repo: &str, exclude_pre: bool) -> Result<String> {
     let mut args = vec![
         "release",
         "list",
         "--repo",
-        GH_RELEASE_REPO,
+        repo,
         "--limit",
         "1",
         "--exclude-drafts",
@@ -242,10 +260,13 @@ async fn fetch_gh_release_latest(exclude_pre: bool) -> Result<String> {
     }
 
     let tag = String::from_utf8(output.stdout)?.trim().to_string();
+    if tag.is_empty() && exclude_pre {
+        return Box::pin(fetch_gh_release_latest(repo, false)).await;
+    }
     // Tags are formatted as "v0.1.141", strip the leading "v"
     let version = tag.strip_prefix('v').unwrap_or(&tag).to_string();
     if version.is_empty() {
-        anyhow::bail!("No releases found in {}", GH_RELEASE_REPO);
+        anyhow::bail!("No releases found in {}", repo);
     }
     Ok(version)
 }
@@ -253,6 +274,7 @@ async fn fetch_gh_release_latest(exclude_pre: bool) -> Result<String> {
 /// No auth required; the upstream bucket is public. For the alpha channel, fetches both `alpha` and `stable` pointers and
 /// returns the semver-greater, matching the npm and gh-release paths. Each base also retries up to 3 times with
 /// exponential backoff (1s, 2s, 4s) on transient failures before falling through to the next base.
+#[allow(dead_code)]
 pub(crate) async fn fetch_gcs_version(channel: &str) -> Result<String> {
     let mut last_err: Option<anyhow::Error> = None;
     let bases = cli_base_urls();
@@ -360,8 +382,10 @@ async fn fetch_gcs_channel_pointer(channel: &str, base_url: &str) -> Result<Stri
 pub async fn fetch_latest_version(installer: &str, config: &UpdateConfig) -> Result<String> {
     match installer {
         "npm" => fetch_npm_version(&config.channel, config.npm_registry.as_deref()).await,
-        "gh-release" => fetch_gh_release_version(&config.channel).await,
-        _ => fetch_gcs_version(&config.channel).await,
+        _ => {
+            let repo = resolve_gh_release_repo(config);
+            fetch_gh_release_version_with_repo(&config.channel, &repo).await
+        }
     }
 }
 
@@ -736,5 +760,62 @@ mod tests {
             checked_at: "not-rfc3339".to_string(),
         };
         assert!(!bad.is_fresh(now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_resolve_gh_release_repo_priority() {
+        let make_config = |repo: Option<&str>| UpdateConfig {
+            proxy_base_url: String::new(),
+            auth_scope: String::new(),
+            deployment_key: None,
+            alpha_test_key: None,
+            channel: "stable".to_string(),
+            npm_registry: None,
+            github_repo: repo.map(str::to_string),
+        };
+
+        // Snapshot and isolate env vars
+        let prev_release = std::env::var_os("GROK_GH_RELEASE_REPO");
+        let prev_github = std::env::var_os("GROK_GITHUB_REPO");
+        unsafe {
+            std::env::remove_var("GROK_GH_RELEASE_REPO");
+            std::env::remove_var("GROK_GITHUB_REPO");
+        }
+
+        // 1. Default fallback
+        assert_eq!(resolve_gh_release_repo(&make_config(None)), "SCys/grok-build");
+
+        // 2. Config overrides default
+        assert_eq!(
+            resolve_gh_release_repo(&make_config(Some("custom/repo"))),
+            "custom/repo"
+        );
+
+        // 3. GROK_GITHUB_REPO overrides config
+        unsafe { std::env::set_var("GROK_GITHUB_REPO", "env-gh/repo") };
+        assert_eq!(
+            resolve_gh_release_repo(&make_config(Some("custom/repo"))),
+            "env-gh/repo"
+        );
+
+        // 4. GROK_GH_RELEASE_REPO overrides GROK_GITHUB_REPO
+        unsafe { std::env::set_var("GROK_GH_RELEASE_REPO", "env-release/repo") };
+        assert_eq!(
+            resolve_gh_release_repo(&make_config(Some("custom/repo"))),
+            "env-release/repo"
+        );
+
+        // Restore env
+        unsafe {
+            match prev_release {
+                Some(v) => std::env::set_var("GROK_GH_RELEASE_REPO", v),
+                None => std::env::remove_var("GROK_GH_RELEASE_REPO"),
+            }
+            match prev_github {
+                Some(v) => std::env::set_var("GROK_GITHUB_REPO", v),
+                None => std::env::remove_var("GROK_GITHUB_REPO"),
+            }
+        }
     }
 }

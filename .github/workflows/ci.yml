@@ -25,6 +25,34 @@ env:
   RUST_MIN_STACK: "16777216"
 
 jobs:
+  version:
+    name: version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      base_version: ${{ steps.ver.outputs.base_version }}
+      sub_version: ${{ steps.ver.outputs.sub_version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          BASE_VERSION=$(grep -m1 '^version' crates/codegen/xai-grok-pager-bin/Cargo.toml | cut -d '"' -f2)
+          echo "base_version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            SUB_VERSION=""
+          else
+            SUB_VERSION="${{ github.run_number }}"
+            VERSION="${BASE_VERSION}-sub.${SUB_VERSION}"
+            TAG="v${VERSION}"
+          fi
+          echo "sub_version=${SUB_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}, tag: ${TAG}"
+
   test:
     name: test
     runs-on: ubuntu-24.04
@@ -63,6 +91,7 @@ jobs:
 
   build:
     name: build-${{ matrix.name }}
+    needs: [version]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -105,23 +134,35 @@ jobs:
           shared-key: ${{ matrix.cache_key }}
 
       - name: Release binary
+        env:
+          GROK_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --locked -p xai-grok-pager-bin --release
 
       - name: Package
         id: package
         run: |
-          VERSION=$(grep -m1 '^version' crates/codegen/xai-grok-pager-bin/Cargo.toml | cut -d '"' -f2)
+          VERSION="${{ needs.version.outputs.version }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          
+
           mkdir -p dist
           cp target/release/xai-grok-pager dist/grok
           chmod +x dist/grok
           ./dist/grok --version
 
+          cp dist/grok "dist/grok-${VERSION}-${{ matrix.name }}"
           cp dist/grok "dist/grok-v${VERSION}-${{ matrix.name }}"
           cp dist/grok "dist/grok-${{ matrix.name }}"
+          tar -czf "dist/grok-${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
           tar -czf "dist/grok-v${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
           tar -czf "dist/grok-${{ matrix.name }}.tar.gz" -C dist grok
+
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            cp dist/grok "dist/grok-${VERSION}-linux-aarch64"
+            cp dist/grok "dist/grok-v${VERSION}-linux-aarch64"
+            cp dist/grok "dist/grok-linux-aarch64"
+            tar -czf "dist/grok-${VERSION}-linux-aarch64.tar.gz" -C dist grok
+            tar -czf "dist/grok-linux-aarch64.tar.gz" -C dist grok
+          fi
           rm dist/grok
 
       - uses: actions/upload-artifact@v4
@@ -132,7 +173,7 @@ jobs:
 
   release:
     name: release
-    needs: [build, test]
+    needs: [version, build, test]
     if: github.ref == 'refs/heads/local-main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
@@ -146,12 +187,8 @@ jobs:
       - name: Prepare release assets
         id: rel_meta
         run: |
-          VERSION=$(grep -m1 '^version' crates/codegen/xai-grok-pager-bin/Cargo.toml | cut -d '"' -f2)
-          if [[ "${{ github.ref }}" =~ ^refs/tags/v ]]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            TAG="v${VERSION}"
-          fi
+          TAG="${{ needs.version.outputs.tag }}"
+          VERSION="${{ needs.version.outputs.version }}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -167,8 +204,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.rel_meta.outputs.tag }}
-          name: Grok Build ${{ steps.rel_meta.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Grok Build ${{ needs.version.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true

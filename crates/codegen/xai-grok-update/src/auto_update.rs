@@ -72,7 +72,12 @@ fn manual_install_cmd(channel: &str) -> String {
 fn reinstall_hint(installer: &str, channel: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
-        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo xai-org-shared/grok-build --pattern 'grok-*' --output grok && chmod +x grok".to_string(),
+        "gh-release" => {
+            let repo = std::env::var("GROK_GH_RELEASE_REPO")
+                .or_else(|_| std::env::var("GROK_GITHUB_REPO"))
+                .unwrap_or_else(|_| "SCys/grok-build".to_string());
+            format!("Please reinstall via GitHub Releases:\n  gh release download --repo {repo} --pattern 'grok-*' --output grok && chmod +x grok")
+        }
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd(channel)),
     }
 }
@@ -457,6 +462,11 @@ fn env_installer() -> Option<&'static str> {
             _ => None,
         };
     }
+    if std::env::var_os("GROK_GH_RELEASE_REPO").is_some()
+        || std::env::var_os("GROK_GITHUB_REPO").is_some()
+    {
+        return Some("gh-release");
+    }
     if std::env::var_os("GROK_MANAGED_BY_NPM").is_some() {
         return Some("npm");
     }
@@ -476,12 +486,8 @@ pub async fn get_installer() -> Option<&'static str> {
     let cfg = config::load_config().await;
     match cfg.cli.installer.as_deref() {
         Some("npm") => Some("npm"),
-        Some("gh-release") => Some("gh-release"),
-        Some(_) => Some("internal"),
-        // A wiped config must not reclassify an npm install as internal:
-        // that re-enables downgrades and updates npm never sees.
-        None if path_resolves_to_npm_entry() => Some("npm"),
-        None => Some("internal"),
+        _ if path_resolves_to_npm_entry() => Some("npm"),
+        _ => Some("gh-release"),
     }
 }
 
@@ -497,6 +503,29 @@ fn is_under_node_modules(exe: &std::path::Path) -> bool {
     exe.components().any(|c| c.as_os_str() == "node_modules")
 }
 
+fn is_sub_version(v: &semver::Version) -> bool {
+    let pre = v.pre.as_str();
+    pre.starts_with("sub.") || pre.starts_with("sub") || pre.starts_with("rev.") || pre.starts_with("patch.")
+}
+
+fn is_version_newer(target: &semver::Version, current: &semver::Version) -> bool {
+    let target_base = (target.major, target.minor, target.patch);
+    let current_base = (current.major, current.minor, current.patch);
+
+    if target_base == current_base {
+        if is_sub_version(target) && current.pre.is_empty() {
+            // sub-version release is newer than unversioned base release (e.g. 1.0.32-sub.1 > 1.0.32)
+            return true;
+        }
+        if target.pre.is_empty() && is_sub_version(current) {
+            // unversioned base release is NOT newer than a sub-version release (e.g. 1.0.32 is not newer than 1.0.32-sub.1)
+            return false;
+        }
+    }
+
+    target > current
+}
+
 fn needs_update(current: &str, target: &str, channel: &str, allow_downgrade: bool) -> Option<bool> {
     let current = semver::Version::parse(current).ok()?;
     let target = semver::Version::parse(target).ok()?;
@@ -504,7 +533,7 @@ fn needs_update(current: &str, target: &str, channel: &str, allow_downgrade: boo
         // NOTE: With the 0.2.X versioning scheme, all versions are plain semver (no pre-release suffix)
         // The pre-release checks in this match are dead code but kept as a safety net
         "stable" | "enterprise" => {
-            if !target.pre.is_empty() {
+            if !target.pre.is_empty() && !is_sub_version(&target) {
                 tracing::warn!(
                     %current, %target,
                     channel = %channel,
@@ -512,7 +541,7 @@ fn needs_update(current: &str, target: &str, channel: &str, allow_downgrade: boo
                 );
                 return Some(false);
             }
-            if !current.pre.is_empty() {
+            if !current.pre.is_empty() && !is_sub_version(&current) && target.pre.is_empty() {
                 return Some(true);
             }
         }
@@ -522,7 +551,7 @@ fn needs_update(current: &str, target: &str, channel: &str, allow_downgrade: boo
     Some(if allow_downgrade {
         target != current
     } else {
-        target > current
+        is_version_newer(&target, &current)
     })
 }
 
@@ -883,8 +912,7 @@ pub async fn run_install_script(
             update_config.npm_registry.as_deref(),
         )
         .map(|()| None),
-        "gh-release" => install_gh_release(target).await.map(|()| None),
-        _ => install_internal(target, update_config).await.map(Some),
+        "gh-release" | _ => install_gh_release(target, update_config).await.map(|()| None),
     };
     // Measured before the success-only cache sweep, so the sweep cannot inflate success durations
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -1355,6 +1383,7 @@ async fn download_cli_artifact_from_gcs(
 }
 
 /// Returns the version that was actually activated.
+#[allow(dead_code)]
 async fn install_internal(target: Option<&str>, update_config: &UpdateConfig) -> Result<String> {
     let bases = crate::version::cli_base_urls();
     let base_refs: Vec<&str> = bases.iter().map(String::as_str).collect();
@@ -2153,7 +2182,7 @@ async fn agent_exe_differs(
 }
 
 /// Download a single asset from a GitHub release via `gh release download`.
-async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -> Result<()> {
+async fn gh_release_download(repo: &str, tag: &str, pattern: &str, dest: &std::path::Path) -> Result<()> {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
@@ -2168,7 +2197,7 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
         "download",
         tag,
         "--repo",
-        crate::version::GH_RELEASE_REPO,
+        repo,
         "--pattern",
         pattern,
         "--output",
@@ -2190,23 +2219,24 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
             "gh release download failed for {} tag {} from {}: {}",
             pattern,
             tag,
-            crate::version::GH_RELEASE_REPO,
+            repo,
             stderr.trim()
         );
     }
     Ok(())
 }
 
-/// Download and install grok from GitHub Releases (xai-org-shared/grok-build). Uses `gh release download` to fetch the
+/// Download and install grok from GitHub Releases. Uses `gh release download` to fetch the
 /// binary matching the current platform. This works anywhere the `gh` CLI is authenticated, without needing npm or
 /// internal network access.
-async fn install_gh_release(target: Option<&str>) -> Result<()> {
+async fn install_gh_release(target: Option<&str>, update_config: &UpdateConfig) -> Result<()> {
+    let repo = crate::version::resolve_gh_release_repo(update_config);
     let (os, arch) = detect_platform()?;
     let platform = format!("{}-{}", os, arch);
 
     let version = match target {
         Some(v) => v.to_string(),
-        None => crate::version::fetch_gh_release_version("stable").await?,
+        None => crate::version::fetch_gh_release_version_with_repo(&update_config.channel, &repo).await?,
     };
 
     let grok_home = grok_home();
@@ -2220,11 +2250,22 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
     let tag = format!("v{}", version);
 
     eprintln!(
-        "  Downloading grok v{} ({}) from GitHub Releases...",
-        version, platform
+        "  Downloading grok v{} ({}) from GitHub Releases ({})...",
+        version, platform, repo
     );
 
-    gh_release_download(&tag, &binary_name, &binary_path).await?;
+    let mut download_result = gh_release_download(&repo, &tag, &binary_name, &binary_path).await;
+    // Fallback: if linux-aarch64 was not found, try linux-arm64
+    if download_result.is_err() && platform == "linux-aarch64" {
+        let arm64_pattern = format!("grok-{}-linux-arm64", version);
+        download_result = gh_release_download(&repo, &tag, &arm64_pattern, &binary_path).await;
+    }
+    // Fallback: try grok-v{version}-{platform}
+    if download_result.is_err() {
+        let v_pattern = format!("grok-v{}-{}", version, platform);
+        download_result = gh_release_download(&repo, &tag, &v_pattern, &binary_path).await;
+    }
+    download_result?;
 
     // chmod +x
     #[cfg(unix)]

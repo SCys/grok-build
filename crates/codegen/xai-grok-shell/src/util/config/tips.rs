@@ -164,6 +164,33 @@ pub fn channel_from_toml_opt(root: &TomlValue) -> Option<String> {
     }
 }
 
+/// Returns the configured installer from `[cli].installer`.
+pub fn installer_from_toml_opt(root: &TomlValue) -> Option<String> {
+    if let TomlValue::Table(table) = root
+        && let Some(TomlValue::Table(cli)) = table.get("cli")
+    {
+        cli.get("installer")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+/// Returns the configured GitHub release repository from `[cli].github_repo` (or `gh_repo`).
+pub fn github_repo_from_toml_opt(root: &TomlValue) -> Option<String> {
+    if let TomlValue::Table(table) = root
+        && let Some(TomlValue::Table(cli)) = table.get("cli")
+    {
+        cli.get("github_repo")
+            .or_else(|| cli.get("gh_repo"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::util::config::RemoteSettings;

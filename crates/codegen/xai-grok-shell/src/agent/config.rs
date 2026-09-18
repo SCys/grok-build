@@ -925,6 +925,8 @@ pub struct CliConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismissed_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub installer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub npm_registry: Option<String>,
