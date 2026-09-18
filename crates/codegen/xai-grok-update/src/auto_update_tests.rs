@@ -927,15 +927,29 @@ fn test_reinstall_hint_npm_mentions_npm_command() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_reinstall_hint_gh_release_mentions_gh_command() {
+    let _g = InstallerEnvGuard::isolate();
     let hint = reinstall_hint("gh-release", "stable");
     assert!(
         hint.contains("gh release download"),
         "should suggest gh release download: {hint}"
     );
     assert!(
-        hint.contains("xai-org-shared/grok-build"),
+        hint.contains("SCys/grok-build"),
         "should name the repo: {hint}"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn test_reinstall_hint_gh_release_custom_repo() {
+    let _g = InstallerEnvGuard::isolate();
+    unsafe { std::env::set_var("GROK_GH_RELEASE_REPO", "my-org/my-repo") };
+    let hint = reinstall_hint("gh-release", "stable");
+    assert!(
+        hint.contains("my-org/my-repo"),
+        "should use configured repo: {hint}"
     );
 }
 
@@ -1299,6 +1313,71 @@ fn test_needs_update_stable_does_not_install_when_pre_and_pre() {
     );
 }
 
+#[test]
+fn test_needs_update_sub_version_allowed_on_stable_channel() {
+    // A base version on stable channel updates to a sub-version release
+    assert_eq!(
+        needs_update("1.0.32", "1.0.32-sub.1", "stable", false),
+        Some(true)
+    );
+    // Sub-versions progress monotonically
+    assert_eq!(
+        needs_update("1.0.32-sub.1", "1.0.32-sub.2", "stable", false),
+        Some(true)
+    );
+    assert_eq!(
+        needs_update("1.0.32-sub.19", "1.0.32-sub.20", "stable", false),
+        Some(true)
+    );
+    // Older sub-version is not an upgrade
+    assert_eq!(
+        needs_update("1.0.32-sub.20", "1.0.32-sub.19", "stable", false),
+        Some(false)
+    );
+    // Older sub-version is allowed when allow_downgrade=true
+    assert_eq!(
+        needs_update("1.0.32-sub.20", "1.0.32-sub.19", "stable", true),
+        Some(true)
+    );
+    // Standard alpha prerelease is still rejected on stable
+    assert_eq!(
+        needs_update("1.0.32", "1.0.32-alpha.1", "stable", false),
+        Some(false)
+    );
+}
+
+#[test]
+fn test_is_version_newer_logic() {
+    use semver::Version;
+
+    let v_base = Version::parse("1.0.32").unwrap();
+    let v_sub1 = Version::parse("1.0.32-sub.1").unwrap();
+    let v_sub2 = Version::parse("1.0.32-sub.2").unwrap();
+    let v_sub10 = Version::parse("1.0.32-sub.10").unwrap();
+    let v_sub20 = Version::parse("1.0.32-sub.20").unwrap();
+    let v_next_base = Version::parse("1.0.33").unwrap();
+    let v_patch1 = Version::parse("1.0.32-patch.1").unwrap();
+    let v_patch2 = Version::parse("1.0.32-patch.2").unwrap();
+
+    // Sub-version is newer than unversioned base release
+    assert!(is_version_newer(&v_sub1, &v_base));
+    assert!(!is_version_newer(&v_base, &v_sub1));
+
+    // Numeric comparison (20 > 10, 10 > 2)
+    assert!(is_version_newer(&v_sub2, &v_sub1));
+    assert!(is_version_newer(&v_sub10, &v_sub2));
+    assert!(is_version_newer(&v_sub20, &v_sub10));
+    assert!(!is_version_newer(&v_sub2, &v_sub10));
+
+    // Higher base version always wins over sub-version
+    assert!(is_version_newer(&v_next_base, &v_sub20));
+    assert!(!is_version_newer(&v_sub20, &v_next_base));
+
+    // Patch/rev prefix works similarly
+    assert!(is_version_newer(&v_patch2, &v_patch1));
+    assert!(!is_version_newer(&v_patch1, &v_patch2));
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // needs_update — allow_downgrade=true (rollback support)
 // ──────────────────────────────────────────────────────────────────────
@@ -1650,6 +1729,8 @@ impl InstallerEnvGuard {
             "GROK_INSTALLER",
             "GROK_MANAGED_BY_NPM",
             "GROK_MANAGED_BY_INTERNAL",
+            "GROK_GH_RELEASE_REPO",
+            "GROK_GITHUB_REPO",
             "npm_config_user_agent",
             "NPM_TOKEN",
         ];
@@ -1801,6 +1882,21 @@ fn test_env_installer_explicit_internal_wins_over_npm_managed() {
         std::env::set_var("GROK_MANAGED_BY_NPM", "1");
     }
     assert_eq!(env_installer(), Some("internal"));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_get_installer_prefers_gh_release_when_repo_env_set() {
+    let _g = InstallerEnvGuard::isolate();
+
+    unsafe { std::env::set_var("GROK_GH_RELEASE_REPO", "other/repo") };
+    assert_eq!(get_installer().await, Some("gh-release"));
+
+    unsafe {
+        std::env::remove_var("GROK_GH_RELEASE_REPO");
+        std::env::set_var("GROK_GITHUB_REPO", "other/repo");
+    }
+    assert_eq!(get_installer().await, Some("gh-release"));
 }
 
 // ──────────────────────────────────────────────────────────────────────

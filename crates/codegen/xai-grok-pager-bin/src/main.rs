@@ -2555,13 +2555,37 @@ fn build_update_config() -> UpdateConfig {
     config.npm_registry = std::env::var(obfstr::obfstr!("GROK_NPM_REGISTRY"))
         .ok()
         .or_else(xai_grok_shell::util::config::load_npm_registry_sync);
-    if let Ok(root) = xai_grok_shell::config::load_effective_config_disk_only()
-        && let Some(ch) = xai_grok_shell::util::config::channel_from_toml_opt(&root)
-    {
-        config.channel = ch;
+    if let Ok(root) = xai_grok_shell::config::load_effective_config_disk_only() {
+        if let Some(ch) = xai_grok_shell::util::config::channel_from_toml_opt(&root) {
+            config.channel = ch;
+        }
+        if let Some(repo) = xai_grok_shell::util::config::github_repo_from_toml_opt(&root) {
+            config.github_repo = Some(repo);
+        }
+    }
+    if config.github_repo.is_none() {
+        config.github_repo = Some("SCys/grok-build".to_string());
     }
     config
 }
+
+fn is_gh_release_configured() -> bool {
+    if let Ok(v) = std::env::var("GROK_INSTALLER") {
+        if matches!(v.to_ascii_lowercase().as_str(), "gh-release" | "gh") {
+            return true;
+        }
+        if v.to_ascii_lowercase().as_str() == "npm" {
+            return false;
+        }
+    }
+    if let Ok(root) = xai_grok_shell::config::load_effective_config_disk_only() {
+        if xai_grok_shell::util::config::installer_from_toml_opt(&root).as_deref() == Some("npm") {
+            return false;
+        }
+    }
+    true
+}
+
 /// Central gate for auto-update checks; add new suppression rules here, not at call sites.
 fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
     if cfg!(debug_assertions) {
@@ -2574,6 +2598,9 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
         .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
     {
         return false;
+    }
+    if is_gh_release_configured() {
+        return true;
     }
     xai_grok_shell::http::cli_chat_proxy_reachable(
         &xai_grok_shell::http::default_cli_chat_proxy_url(),
