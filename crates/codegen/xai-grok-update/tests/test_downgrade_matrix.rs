@@ -50,6 +50,7 @@ fn make_config(channel: &str) -> UpdateConfig {
         alpha_test_key: None,
         channel: channel.to_string(),
         npm_registry: None,
+        github_repo: None,
     }
 }
 

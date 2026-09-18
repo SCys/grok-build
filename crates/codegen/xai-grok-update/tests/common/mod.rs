@@ -111,6 +111,7 @@ pub fn make_update_config(channel: &str) -> xai_grok_update::UpdateConfig {
         alpha_test_key: None,
         channel: channel.to_string(),
         npm_registry: None,
+        github_repo: None,
     }
 }
 
