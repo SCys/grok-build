@@ -382,6 +382,8 @@ async fn fetch_gcs_channel_pointer(channel: &str, base_url: &str) -> Result<Stri
 pub async fn fetch_latest_version(installer: &str, config: &UpdateConfig) -> Result<String> {
     match installer {
         "npm" => fetch_npm_version(&config.channel, config.npm_registry.as_deref()).await,
+        // The WinGet package ships only stable releases, whatever channel is configured.
+        crate::winget::WINGET => fetch_gcs_version("stable").await,
         _ => {
             let repo = resolve_gh_release_repo(config);
             fetch_gh_release_version_with_repo(&config.channel, &repo).await
@@ -509,6 +511,11 @@ pub fn cached_stable_version() -> Option<String> {
     let content = std::fs::read_to_string(&version_path).ok()?;
     let gv: GrokVersion = serde_json::from_str(&content).ok()?;
     gv.stable_version
+}
+
+/// An empty or `"stable"` channel means stable, the installers' default (`CHANNEL="${GROK_CHANNEL:-stable}"` in install.sh).
+pub(crate) fn is_stable_channel(channel: &str) -> bool {
+    channel.is_empty() || channel == "stable"
 }
 
 /// Returns `Some("alpha")` when `current > stable`, `Some("stable")` when `current <= stable`, or `None` when either version fails to parse.
