@@ -153,9 +153,22 @@ impl XaiProtoBuilder {
         // Can only process one input file when using --dependency_out=FILE.
         for proto in protos {
             let mut command = Command::new(protoc.unwrap_or(Path::new("protoc")));
+
+            #[cfg(unix)]
             command
                 .arg("--dependency_out=/dev/stdout")
                 .arg("--descriptor_set_out=/dev/null");
+
+            #[cfg(not(unix))]
+            let temp_dir = tempfile::tempdir()?;
+            #[cfg(not(unix))]
+            let dep_file = temp_dir.path().join("dep.d");
+            #[cfg(not(unix))]
+            let desc_file = temp_dir.path().join("desc.pb");
+            #[cfg(not(unix))]
+            command
+                .arg(format!("--dependency_out={}", dep_file.display()))
+                .arg(format!("--descriptor_set_out={}", desc_file.display()));
 
             // Add protoc's well-known types include directory first (if found).
             // This is needed for Bazel sandboxed builds where protoc and its
@@ -181,22 +194,45 @@ impl XaiProtoBuilder {
                 return Err(anyhow::anyhow!("protoc command failed"));
             }
 
+            #[cfg(unix)]
             let output =
                 String::from_utf8(output.stdout).context("protoc command output not UTF-8")?;
 
+            #[cfg(not(unix))]
+            let output =
+                std::fs::read_to_string(&dep_file).context("protoc dependency file read failed")?;
+
             let mut lines = output.lines();
             let first_line = lines.next().context("protoc command output is empty")?;
+
+            #[cfg(unix)]
             let prefix = "/dev/null:";
+            #[cfg(unix)]
             let rem = first_line.strip_prefix(prefix).with_context(|| {
                 format!("protoc command output must start with /dev/null: {output:?}")
             })?;
+
+            #[cfg(not(unix))]
+            let rem = if let Some(idx) = first_line.find("desc.pb:") {
+                &first_line[idx + "desc.pb:".len()..]
+            } else if let Some((_, rem)) = first_line.rsplit_once(':') {
+                rem
+            } else {
+                first_line
+            };
+
             for line in iter::once(rem).chain(lines) {
                 let line = line.trim();
-                let line = line.strip_suffix("\\").unwrap_or(line);
+                let line = line.strip_suffix("\\").unwrap_or(line).trim();
+                if line.is_empty() {
+                    continue;
+                }
                 // Depending on absolute paths like
                 // /Users/user/homebrew/Cellar/protobuf/29.1/include/google/protobuf/timestamp.proto
                 // is valid, but we want to have output more deterministic.
-                if line.contains("/include/google/protobuf/") {
+                if line.contains("/include/google/protobuf/")
+                    || line.contains(r"\include\google\protobuf\")
+                {
                     continue;
                 }
 
