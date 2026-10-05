@@ -166,7 +166,7 @@ cargo fmt --all
 仓库原先没有 CI。本分支在 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 里跑：
 
 - **test**：`xai-grok-http`、`xai-grok-update`、`xai-grok-shell` 的 `--lib` 测试，以及 `xai-grok-pager-bin` 的 `--bins` 测试（不跑整仓 integration，避免 TTY/网络依赖）
-- **build**：`cargo build -p xai-grok-pager-bin --release`，产物以 artifact `grok-linux-x86_64` 上传
+- **build**：`cargo build -p xai-grok-pager-bin --release`，支持 Linux x86_64、Linux arm64 以及 Windows x86_64 矩阵构建，产物以 artifacts 及 GitHub Release 发布
 
 触发：`main`、`local-main`、`local/**` 的 push，以及 pull request。GitHub-hosted runner 直连 crates.io / GitHub，不用国内 Docker 镜像。
 

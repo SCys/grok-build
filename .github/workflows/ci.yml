@@ -21,7 +21,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUSTUP_TOOLCHAIN: "1.94.0"
-  PROTOC: /usr/local/bin/protoc
   RUST_MIN_STACK: "16777216"
 
 jobs:
@@ -71,6 +70,7 @@ jobs:
           curl -fsSL -o /tmp/protoc.zip \
             "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip"
           sudo unzip -qo /tmp/protoc.zip -d /usr/local
+          echo "PROTOC=/usr/local/bin/protoc" >> "$GITHUB_ENV"
           protoc --version
 
       - name: Rust toolchain
@@ -94,6 +94,9 @@ jobs:
     needs: [version]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -108,21 +111,40 @@ jobs:
             arch: aarch64
             protoc_zip: protoc-29.3-linux-aarch_64.zip
             cache_key: linux-arm64
+          - name: windows-x86_64
+            os: windows-2022
+            arch: x86_64
+            protoc_zip: protoc-29.3-win64.zip
+            cache_key: windows-x64
     steps:
       - uses: actions/checkout@v4
 
-      - name: System packages
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake clang libclang-dev pkg-config libdbus-1-dev unzip
 
-      - name: Install protoc 29.3
+      - name: Install protoc 29.3 (Linux)
+        if: runner.os == 'Linux'
         run: |
           curl -fsSL -o /tmp/protoc.zip \
             "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/${{ matrix.protoc_zip }}"
           sudo unzip -qo /tmp/protoc.zip -d /usr/local
+          echo "PROTOC=/usr/local/bin/protoc" >> "$GITHUB_ENV"
           protoc --version
+
+      - name: Install protoc 29.3 (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/protoc.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/${{ matrix.protoc_zip }}"
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -qo "$RUNNER_TEMP/protoc.zip" -d "$RUNNER_TEMP/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          echo "PROTOC=$RUNNER_TEMP/protoc/bin/protoc.exe" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/protoc/bin/protoc.exe" --version
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -145,25 +167,46 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
           mkdir -p dist
-          cp target/release/xai-grok-pager dist/grok
-          chmod +x dist/grok
-          ./dist/grok --version
 
-          cp dist/grok "dist/grok-${VERSION}-${{ matrix.name }}"
-          cp dist/grok "dist/grok-v${VERSION}-${{ matrix.name }}"
-          cp dist/grok "dist/grok-${{ matrix.name }}"
-          tar -czf "dist/grok-${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
-          tar -czf "dist/grok-v${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
-          tar -czf "dist/grok-${{ matrix.name }}.tar.gz" -C dist grok
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN_SRC="target/release/xai-grok-pager.exe"
+            BIN_DEST="dist/grok.exe"
+            cp "$BIN_SRC" "$BIN_DEST"
+            ./dist/grok.exe --version
 
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            cp dist/grok "dist/grok-${VERSION}-linux-aarch64"
-            cp dist/grok "dist/grok-v${VERSION}-linux-aarch64"
-            cp dist/grok "dist/grok-linux-aarch64"
-            tar -czf "dist/grok-${VERSION}-linux-aarch64.tar.gz" -C dist grok
-            tar -czf "dist/grok-linux-aarch64.tar.gz" -C dist grok
+            cp "$BIN_DEST" "dist/grok-${VERSION}-${{ matrix.name }}.exe"
+            cp "$BIN_DEST" "dist/grok-v${VERSION}-${{ matrix.name }}.exe"
+            cp "$BIN_DEST" "dist/grok-${{ matrix.name }}.exe"
+            tar -czf "dist/grok-${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok.exe
+            tar -czf "dist/grok-v${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok.exe
+            tar -czf "dist/grok-${{ matrix.name }}.tar.gz" -C dist grok.exe
+            (cd dist && 7z a "grok-${VERSION}-${{ matrix.name }}.zip" grok.exe)
+            (cd dist && 7z a "grok-v${VERSION}-${{ matrix.name }}.zip" grok.exe)
+            (cd dist && 7z a "grok-${{ matrix.name }}.zip" grok.exe)
+            rm "$BIN_DEST"
+          else
+            BIN_SRC="target/release/xai-grok-pager"
+            BIN_DEST="dist/grok"
+            cp "$BIN_SRC" "$BIN_DEST"
+            chmod +x "$BIN_DEST"
+            ./dist/grok --version
+
+            cp "$BIN_DEST" "dist/grok-${VERSION}-${{ matrix.name }}"
+            cp "$BIN_DEST" "dist/grok-v${VERSION}-${{ matrix.name }}"
+            cp "$BIN_DEST" "dist/grok-${{ matrix.name }}"
+            tar -czf "dist/grok-${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
+            tar -czf "dist/grok-v${VERSION}-${{ matrix.name }}.tar.gz" -C dist grok
+            tar -czf "dist/grok-${{ matrix.name }}.tar.gz" -C dist grok
+
+            if [ "${{ matrix.arch }}" = "aarch64" ]; then
+              cp "$BIN_DEST" "dist/grok-${VERSION}-linux-aarch64"
+              cp "$BIN_DEST" "dist/grok-v${VERSION}-linux-aarch64"
+              cp "$BIN_DEST" "dist/grok-linux-aarch64"
+              tar -czf "dist/grok-${VERSION}-linux-aarch64.tar.gz" -C dist grok
+              tar -czf "dist/grok-linux-aarch64.tar.gz" -C dist grok
+            fi
+            rm "$BIN_DEST"
           fi
-          rm dist/grok
 
       - uses: actions/upload-artifact@v4
         with:
